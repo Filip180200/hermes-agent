@@ -1,6 +1,9 @@
 """Dashboard portfolio card.
 
-Live price fetch: Stooq (stocks, free, no key) + CoinGecko (crypto, free, no
+Live price fetch: Yahoo Finance chart API (stocks, free, no key — Stooq's
+``/q/l/`` CSV endpoint was retired and its replacement sits behind a JS
+proof-of-work challenge a server-side request can't solve, see the "Hermes
+Dashboard" Obsidian note entry for 2026-09-03) + CoinGecko (crypto, free, no
 key). Results are cached in-process for ``_CACHE_TTL_S`` so a page reload
 doesn't hammer either API. Tracked positions come from
 ``dashboard_config/portfolio.json`` — see the "Dashboard — sekcje 1 i 3" note
@@ -34,24 +37,25 @@ def _load_config() -> dict:
         return {"stocks": [], "crypto": []}
 
 
-async def _fetch_stock_price(client, ticker: str) -> Optional[float]:
-    """Latest close for a Stooq symbol, e.g. ``CDR.WA``. None on any failure
-    (unknown symbol, network error, Stooq returning "N/D")."""
+async def _fetch_stock_price(client, ticker: str) -> tuple:
+    """(price, currency) for a Yahoo Finance symbol, e.g. ``CDR.WA``.
+    ``(None, None)`` on any failure (unknown symbol, network error, missing
+    price in the response)."""
     try:
         resp = await client.get(
-            "https://stooq.com/q/l/",
-            params={"s": ticker, "f": "sd2t2ohlcv", "h": "", "e": "csv"},
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
+            headers={"User-Agent": "Mozilla/5.0"},
         )
         resp.raise_for_status()
-        lines = resp.text.strip().splitlines()
-        if len(lines) < 2:
-            return None
-        # header: Symbol,Date,Time,Open,High,Low,Close,Volume
-        close = lines[1].split(",")[6]
-        return float(close) if close not in ("", "N/D") else None
+        meta = resp.json()["chart"]["result"][0]["meta"]
+        price = meta.get("regularMarketPrice")
+        currency = meta.get("currency")
+        if price is None:
+            return None, None
+        return float(price), currency
     except Exception:
-        _log.warning("portfolio: stooq fetch failed for %s", ticker, exc_info=True)
-        return None
+        _log.warning("portfolio: yahoo finance fetch failed for %s", ticker, exc_info=True)
+        return None, None
 
 
 async def _fetch_crypto_prices(client, ids: List[str]) -> Dict[str, float]:
@@ -78,14 +82,14 @@ async def _build_portfolio() -> dict:
     crypto_cfg = config.get("crypto", [])
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(8.0)) as client:
-        stock_prices = await asyncio.gather(
+        stock_results = await asyncio.gather(
             *(_fetch_stock_price(client, s["ticker"]) for s in stocks_cfg)
         )
         crypto_prices = await _fetch_crypto_prices(client, [c["id"] for c in crypto_cfg])
 
     stocks = [
-        {**entry, "price": price, "currency": "PLN" if price is not None else None}
-        for entry, price in zip(stocks_cfg, stock_prices)
+        {**entry, "price": price, "currency": currency}
+        for entry, (price, currency) in zip(stocks_cfg, stock_results)
     ]
     crypto = [
         {
