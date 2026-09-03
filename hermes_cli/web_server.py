@@ -15406,6 +15406,12 @@ from hermes_cli.web_routers.tools import (  # noqa: E402,F401 — legacy re-expo
     grant_computer_use_permissions,
 )
 
+from hermes_cli.web_routers import portfolio as _portfolio_routes  # noqa: E402
+from hermes_cli.web_routers import articles as _articles_routes  # noqa: E402
+
+app.include_router(_portfolio_routes.router)
+app.include_router(_articles_routes.router)
+
 
 
 

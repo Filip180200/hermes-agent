@@ -212,3 +212,8 @@ native/fts5_cjk/*.so
 # interrupted; consumed by launch-time recovery. Never commit it (was tracked
 # by accident via 3a69e34702, removed in the #72002 salvage).
 .lazy-refresh-incomplete
+
+# Personal dashboard articles reading-list store — local-file stand-in for
+# the Firestore `articles` collection (see hermes_cli/web_routers/articles.py).
+# Generated at runtime, not shared/product code.
+hermes_cli/dashboard_config/articles_store.json

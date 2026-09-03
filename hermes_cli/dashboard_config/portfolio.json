@@ -1,0 +1,10 @@
+{
+  "stocks": [
+    { "ticker": "CDR.WA", "label": "CD Projekt", "shares": 0 },
+    { "ticker": "PKN.WA", "label": "Orlen", "shares": 0 }
+  ],
+  "crypto": [
+    { "id": "bitcoin", "label": "Bitcoin", "amount": 0 },
+    { "id": "ethereum", "label": "Ethereum", "amount": 0 }
+  ]
+}
