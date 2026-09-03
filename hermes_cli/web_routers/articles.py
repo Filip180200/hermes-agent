@@ -1,9 +1,16 @@
 """Dashboard articles card — PhD reading list.
 
-Queries Semantic Scholar (free, no key needed at this volume) for the
-keywords in ``dashboard_config/articles.json`` and stores results in
+Queries OpenAlex (free, no key needed) for the keywords in
+``dashboard_config/articles.json`` and stores results in
 ``dashboard_config/articles_store.json``, deduped by ``source-sourceId`` so
 repeat fetches don't re-add what's already there.
+
+Originally used Semantic Scholar's unauthenticated search endpoint, but that
+tier shares a small global rate-limit pool that is essentially always
+exhausted (persistent 429s even for a single request) — see the "Hermes
+Dashboard" Obsidian note entry for 2026-09-03. OpenAlex has no such issue and
+covers the same ground (works across all fields, including CS and
+psychology).
 
 This is a **local-file stand-in for the Firestore ``articles`` collection**
 described in the "Dashboard — sekcje 1 i 3" Obsidian note — no Firestore
@@ -15,7 +22,7 @@ replacement; the document shape already matches.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -26,8 +33,8 @@ router = APIRouter()
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "dashboard_config" / "articles.json"
 _STORE_PATH = Path(__file__).resolve().parent.parent / "dashboard_config" / "articles_store.json"
 
-_SEMANTIC_SCHOLAR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
-_SEMANTIC_SCHOLAR_FIELDS = "title,abstract,authors,url,publicationDate"
+_OPENALEX_SEARCH_URL = "https://api.openalex.org/works"
+_OPENALEX_SELECT = "id,title,abstract_inverted_index,authorships,primary_location,publication_date"
 _RESULTS_PER_KEYWORD = 10
 
 
@@ -59,34 +66,50 @@ def _save_store(store: Dict[str, dict]) -> None:
     )
 
 
-async def _search_semantic_scholar(client, keyword: str) -> List[dict]:
+async def _search_openalex(client, keyword: str) -> List[dict]:
     try:
         resp = await client.get(
-            _SEMANTIC_SCHOLAR_SEARCH_URL,
+            _OPENALEX_SEARCH_URL,
             params={
-                "query": keyword,
-                "fields": _SEMANTIC_SCHOLAR_FIELDS,
-                "limit": _RESULTS_PER_KEYWORD,
+                "search": keyword,
+                "select": _OPENALEX_SELECT,
+                "per-page": _RESULTS_PER_KEYWORD,
+                "mailto": "lieberfilip@gmail.com",
             },
         )
         resp.raise_for_status()
-        return resp.json().get("data", [])
+        return resp.json().get("results", [])
     except Exception:
-        _log.warning("articles: semantic scholar search failed for %r", keyword, exc_info=True)
+        _log.warning("articles: openalex search failed for %r", keyword, exc_info=True)
         return []
 
 
+def _reconstruct_abstract(inverted_index: Optional[Dict[str, List[int]]]) -> str:
+    """OpenAlex ships abstracts as a word -> [positions] inverted index
+    (licensing reasons) instead of plain text — rebuild the sentence."""
+    if not inverted_index:
+        return ""
+    positions = [(pos, word) for word, idxs in inverted_index.items() for pos in idxs]
+    positions.sort()
+    return " ".join(word for _, word in positions)
+
+
 def _to_article_doc(paper: dict) -> dict:
-    paper_id = paper.get("paperId")
+    paper_id = (paper.get("id") or "").rsplit("/", 1)[-1] or None
+    primary_location = paper.get("primary_location") or {}
     return {
-        "id": f"semanticscholar-{paper_id}",
-        "source": "semanticscholar",
+        "id": f"openalex-{paper_id}",
+        "source": "openalex",
         "sourceId": paper_id,
         "title": paper.get("title") or "(untitled)",
-        "authors": [a.get("name") for a in paper.get("authors", []) if a.get("name")],
-        "abstract": paper.get("abstract") or "",
-        "url": paper.get("url"),
-        "publishedDate": paper.get("publicationDate"),
+        "authors": [
+            a.get("author", {}).get("display_name")
+            for a in paper.get("authorships", [])
+            if a.get("author", {}).get("display_name")
+        ],
+        "abstract": _reconstruct_abstract(paper.get("abstract_inverted_index")),
+        "url": primary_location.get("landing_page_url") or paper.get("id"),
+        "publishedDate": paper.get("publication_date"),
         "status": "new",
         "zoteroKey": None,
     }
@@ -118,7 +141,7 @@ async def fetch_articles():
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         for keyword in keywords:
-            for paper in await _search_semantic_scholar(client, keyword):
+            for paper in await _search_openalex(client, keyword):
                 doc = _to_article_doc(paper)
                 if doc["id"] not in store:
                     store[doc["id"]] = doc
