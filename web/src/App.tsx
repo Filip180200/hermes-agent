@@ -37,6 +37,7 @@ import {
   KeyRound,
   Menu,
   MessageSquare,
+  Newspaper,
   Package,
   PanelLeftClose,
   PanelLeftOpen,
@@ -51,6 +52,7 @@ import {
   Star,
   Terminal,
   Users,
+  Wallet,
   Webhook,
   Wrench,
   X,
@@ -96,6 +98,8 @@ const ChannelsPage = lazy(() => import("@/pages/ChannelsPage"));
 const WebhooksPage = lazy(() => import("@/pages/WebhooksPage"));
 const SystemPage = lazy(() => import("@/pages/SystemPage"));
 const ChatPage = lazy(() => import("@/pages/ChatPage"));
+const PortfolioPage = lazy(() => import("@/pages/PortfolioPage"));
+const ArticlesPage = lazy(() => import("@/pages/ArticlesPage"));
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { useI18n } from "@/i18n";
@@ -156,6 +160,8 @@ const CHAT_NAV_ITEM: NavItem = {
 const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/": RootRedirect,
   "/sessions": SessionsPage,
+  "/portfolio": PortfolioPage,
+  "/articles": ArticlesPage,
   "/files": FilesPage,
   "/analytics": AnalyticsPage,
   "/models": ModelsPage,
@@ -190,6 +196,8 @@ const BUILTIN_NAV_REST: NavItem[] = [
     label: "Sessions",
     icon: MessageSquare,
   },
+  { path: "/portfolio", label: "Portfolio", icon: Wallet },
+  { path: "/articles", label: "Articles", icon: Newspaper },
   { path: "/files", label: "Files", icon: FolderOpen },
   {
     path: "/analytics",
