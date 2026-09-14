@@ -551,6 +551,7 @@ class EmailAdapter(BasePlatformAdapter):
         # instead of an obvious "host not set" error.
         extra = config.extra or {}
         self._address = (_get_secret("EMAIL_ADDRESS", "") or extra.get("address", "")).strip()
+        self._login = (_get_secret("EMAIL_IMAP_LOGIN", "") or extra.get("imap_login", "") or self._address).strip()
         self._password = _get_secret("EMAIL_PASSWORD", "")
         self._imap_host = (_get_secret("EMAIL_IMAP_HOST", "") or extra.get("imap_host", "")).strip()
         self._imap_port = _esecret_int("EMAIL_IMAP_PORT", 993)
@@ -712,7 +713,7 @@ class EmailAdapter(BasePlatformAdapter):
             imap = None
             try:
                 imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
-                imap.login(self._address, self._password)
+                imap.login(self._login, self._password)
                 _send_imap_id(imap)
                 imap.select("INBOX")
                 snapshot = self._seen_uids_snapshot.get(self._address)
@@ -766,7 +767,7 @@ class EmailAdapter(BasePlatformAdapter):
             # Test SMTP connection
             smtp = self._connect_smtp()
             try:
-                smtp.login(self._address, self._password)
+                smtp.login(self._login, self._password)
             finally:
                 smtp.quit()
             logger.info("[Email] SMTP connection test passed.")
@@ -855,7 +856,7 @@ class EmailAdapter(BasePlatformAdapter):
         try:
             imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
             try:
-                imap.login(self._address, self._password)
+                imap.login(self._login, self._password)
                 _send_imap_id(imap)
                 imap.select("INBOX")
 
@@ -1187,7 +1188,7 @@ class EmailAdapter(BasePlatformAdapter):
 
         smtp = self._connect_smtp()
         try:
-            smtp.login(self._address, self._password)
+            smtp.login(self._login, self._password)
             smtp.send_message(msg)
         finally:
             try:
@@ -1313,7 +1314,7 @@ class EmailAdapter(BasePlatformAdapter):
 
         smtp = self._connect_smtp()
         try:
-            smtp.login(self._address, self._password)
+            smtp.login(self._login, self._password)
             smtp.send_message(msg)
         finally:
             try:
@@ -1391,7 +1392,7 @@ class EmailAdapter(BasePlatformAdapter):
 
         smtp = self._connect_smtp()
         try:
-            smtp.login(self._address, self._password)
+            smtp.login(self._login, self._password)
             smtp.send_message(msg)
         finally:
             try:
