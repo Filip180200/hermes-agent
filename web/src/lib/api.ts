@@ -1115,6 +1115,23 @@ export const api = {
         profile: getManagementProfile() || undefined,
       }),
     }),
+
+  // ── Dashboard landing-page cards: portfolio + PhD articles ──────────
+  getPortfolio: () => fetchJSON<PortfolioResponse>("/api/portfolio"),
+  getArticles: (status: "new" | "all" | "read" | "saved" | "dismissed" = "new") =>
+    fetchJSON<ArticlesResponse>(
+      `/api/articles?status=${encodeURIComponent(status)}`,
+    ),
+  fetchArticles: () =>
+    fetchJSON<ArticlesFetchResponse>("/api/articles/fetch", {
+      method: "POST",
+    }),
+  updateArticleStatus: (id: string, status: ArticleStatus) =>
+    fetchJSON<Article>(`/api/articles/${encodeURIComponent(id)}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    }),
   clearPendingPairing: () =>
     fetchJSON<{ ok: boolean; cleared: number }>("/api/pairing/clear-pending", {
       method: "POST",
@@ -1606,6 +1623,55 @@ export interface PairingUser {
 export interface PairingResponse {
   pending: PairingUser[];
   approved: PairingUser[];
+}
+
+// ── Dashboard landing-page cards: portfolio + PhD articles ──────────────
+
+export interface PortfolioStock {
+  ticker: string;
+  label?: string;
+  price: number | null;
+  currency: string | null;
+}
+
+export interface PortfolioCrypto {
+  id: string;
+  label?: string;
+  price: number | null;
+  currency: string | null;
+}
+
+export interface PortfolioResponse {
+  stocks: PortfolioStock[];
+  crypto: PortfolioCrypto[];
+  placeholder: boolean;
+}
+
+export type ArticleStatus = "new" | "read" | "saved" | "dismissed";
+
+export interface Article {
+  id: string;
+  source: string;
+  sourceId: string | null;
+  title: string;
+  authors: string[];
+  abstract: string;
+  url: string | null;
+  publishedDate: string | null;
+  status: ArticleStatus;
+  zoteroKey: string | null;
+}
+
+export interface ArticlesResponse {
+  articles: Article[];
+  keywords: string[];
+  placeholder: boolean;
+}
+
+export interface ArticlesFetchResponse {
+  placeholder: boolean;
+  fetched_keywords: string[];
+  new_articles: number;
 }
 
 export interface WebhookRoute {
