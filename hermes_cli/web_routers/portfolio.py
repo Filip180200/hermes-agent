@@ -9,6 +9,9 @@ doesn't hammer either API. Tracked positions come from
 ``dashboard_config/portfolio.json`` — see the "Dashboard — sekcje 1 i 3" note
 in the Obsidian vault for how to edit that list (no restart needed, the
 config is read fresh on cache expiry).
+
+Each entry also carries a ``history`` list: up to 7 daily closes (oldest
+first) used to draw a sparkline on the card.
 """
 
 import asyncio
@@ -38,24 +41,28 @@ def _load_config() -> dict:
 
 
 async def _fetch_stock_price(client, ticker: str) -> tuple:
-    """(price, currency) for a Yahoo Finance symbol, e.g. ``CDR.WA``.
-    ``(None, None)`` on any failure (unknown symbol, network error, missing
-    price in the response)."""
+    """(price, currency, history) for a Yahoo Finance symbol, e.g. ``XTB.WA``.
+    ``(None, None, [])`` on any failure (unknown symbol, network error,
+    missing price in the response)."""
     try:
         resp = await client.get(
             f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
+            params={"range": "7d", "interval": "1d"},
             headers={"User-Agent": "Mozilla/5.0"},
         )
         resp.raise_for_status()
-        meta = resp.json()["chart"]["result"][0]["meta"]
+        result = resp.json()["chart"]["result"][0]
+        meta = result["meta"]
         price = meta.get("regularMarketPrice")
         currency = meta.get("currency")
         if price is None:
-            return None, None
-        return float(price), currency
+            return None, None, []
+        closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
+        history = [round(float(c), 6) for c in closes if c is not None]
+        return float(price), currency, history
     except Exception:
         _log.warning("portfolio: yahoo finance fetch failed for %s", ticker, exc_info=True)
-        return None, None
+        return None, None, []
 
 
 async def _fetch_crypto_prices(client, ids: List[str]) -> Dict[str, float]:
@@ -74,6 +81,20 @@ async def _fetch_crypto_prices(client, ids: List[str]) -> Dict[str, float]:
         return {}
 
 
+async def _fetch_crypto_history(client, coin_id: str) -> List[float]:
+    try:
+        resp = await client.get(
+            f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart",
+            params={"vs_currency": "usd", "days": 7, "interval": "daily"},
+        )
+        resp.raise_for_status()
+        prices = resp.json().get("prices", [])
+        return [round(float(p[1]), 6) for p in prices]
+    except Exception:
+        _log.warning("portfolio: coingecko history fetch failed for %s", coin_id, exc_info=True)
+        return []
+
+
 async def _build_portfolio() -> dict:
     import httpx
 
@@ -85,19 +106,23 @@ async def _build_portfolio() -> dict:
         stock_results = await asyncio.gather(
             *(_fetch_stock_price(client, s["ticker"]) for s in stocks_cfg)
         )
-        crypto_prices = await _fetch_crypto_prices(client, [c["id"] for c in crypto_cfg])
+        crypto_prices, crypto_histories = await asyncio.gather(
+            _fetch_crypto_prices(client, [c["id"] for c in crypto_cfg]),
+            asyncio.gather(*(_fetch_crypto_history(client, c["id"]) for c in crypto_cfg)),
+        )
 
     stocks = [
-        {**entry, "price": price, "currency": currency}
-        for entry, (price, currency) in zip(stocks_cfg, stock_results)
+        {**entry, "price": price, "currency": currency, "history": history}
+        for entry, (price, currency, history) in zip(stocks_cfg, stock_results)
     ]
     crypto = [
         {
             **entry,
             "price": crypto_prices.get(entry["id"]),
             "currency": "USD" if entry["id"] in crypto_prices else None,
+            "history": history,
         }
-        for entry in crypto_cfg
+        for entry, history in zip(crypto_cfg, crypto_histories)
     ]
     return {"stocks": stocks, "crypto": crypto, "placeholder": False}
 
