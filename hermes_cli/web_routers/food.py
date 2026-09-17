@@ -204,6 +204,7 @@ class SuggestNowRequest(BaseModel):
     fridgeOnly: bool = False
     liked: Optional[List[str]] = None
     disliked: Optional[List[str]] = None
+    avoid: Optional[List[str]] = None
 
 
 class SuggestNowResponse(BaseModel):
@@ -321,6 +322,10 @@ Odpowiedz WYŁĄCZNIE czystym JSON-em (bez markdown) w formacie:
 async def suggest_now(payload: SuggestNowRequest):
     craving_line = f"\nUżytkownik ma dziś ochotę na: {payload.craving}." if payload.craving else ""
     feedback_lines = _feedback_lines(payload.liked, payload.disliked)
+    avoid_line = (
+        f"\nUżytkownikowi nie spodobały się poprzednie propozycje ({', '.join(payload.avoid)}) — "
+        "zaproponuj coś zupełnie innego." if payload.avoid else ""
+    )
     if payload.fridgeOnly:
         constraint_line = (
             "\nUżyj WYŁĄCZNIE składników z listy powyżej (dopuszczalne tylko sól/pieprz/olej jako "
@@ -332,7 +337,7 @@ async def suggest_now(payload: SuggestNowRequest):
 
     prompt = f"""Mam w lodówce/spiżarni:
 {_format_inventory(payload.items)}
-{craving_line}{feedback_lines}
+{craving_line}{feedback_lines}{avoid_line}
 
 Zaproponuj 1-3 szybkie posiłki, które mogę zrobić TERAZ z tego, co mam (priorytet: składniki z \
 bliską datą ważności, wysoka zawartość białka).{constraint_line}
