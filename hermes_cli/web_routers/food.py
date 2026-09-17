@@ -190,6 +190,8 @@ class GenerateWeekPlanRequest(BaseModel):
     dailyKcalTarget: Optional[int] = None
     dailyProteinTarget: Optional[int] = None
     preference: Optional[str] = None
+    liked: Optional[List[str]] = None
+    disliked: Optional[List[str]] = None
 
 
 class GenerateWeekPlanResponse(BaseModel):
@@ -199,6 +201,9 @@ class GenerateWeekPlanResponse(BaseModel):
 class SuggestNowRequest(BaseModel):
     items: List[InventoryItemIn]
     craving: Optional[str] = None
+    fridgeOnly: bool = False
+    liked: Optional[List[str]] = None
+    disliked: Optional[List[str]] = None
 
 
 class SuggestNowResponse(BaseModel):
@@ -209,10 +214,21 @@ class RegenerateMealRequest(BaseModel):
     items: List[InventoryItemIn]
     preference: Optional[str] = None
     avoid: Optional[List[str]] = None
+    liked: Optional[List[str]] = None
+    disliked: Optional[List[str]] = None
 
 
 class RegenerateMealResponse(BaseModel):
     recipe: RecipeOut
+
+
+def _feedback_lines(liked: Optional[List[str]], disliked: Optional[List[str]]) -> str:
+    lines = ""
+    if disliked:
+        lines += f"\nUżytkownikowi NIE smakowały wcześniej: {', '.join(disliked)}. Unikaj tych potraw."
+    if liked:
+        lines += f"\nUżytkownikowi smakowały wcześniej: {', '.join(liked)}. Możesz się nimi inspirować."
+    return lines
 
 
 def _format_inventory(items: List[InventoryItemIn]) -> str:
@@ -276,10 +292,11 @@ async def generate_week_plan(payload: GenerateWeekPlanRequest):
         )
 
     preference_line = f"\nPreferencje: {payload.preference}." if payload.preference else ""
+    feedback_lines = _feedback_lines(payload.liked, payload.disliked)
 
     prompt = f"""Mam w lodówce/spiżarni:
 {_format_inventory(payload.items)}
-{target_line}{preference_line}
+{target_line}{preference_line}{feedback_lines}
 
 Zaproponuj plan posiłków na {days_count} dni (jeden przepis dziennie, obiadokolacja). Priorytetyzuj \
 składniki z najbliższą datą ważności (żeby się nie zmarnowały) oraz przepisy wysokobiałkowe. Możesz \
@@ -303,13 +320,22 @@ Odpowiedz WYŁĄCZNIE czystym JSON-em (bez markdown) w formacie:
 @router.post("/api/food/suggest-now", response_model=SuggestNowResponse)
 async def suggest_now(payload: SuggestNowRequest):
     craving_line = f"\nUżytkownik ma dziś ochotę na: {payload.craving}." if payload.craving else ""
+    feedback_lines = _feedback_lines(payload.liked, payload.disliked)
+    if payload.fridgeOnly:
+        constraint_line = (
+            "\nUżyj WYŁĄCZNIE składników z listy powyżej (dopuszczalne tylko sól/pieprz/olej jako "
+            "podstawa). Nie proponuj niczego, co wymagałoby dokupienia czegoś — sklep może być "
+            "zamknięty."
+        )
+    else:
+        constraint_line = "\nMożesz zakładać podstawowe przyprawy/olej/sól."
 
     prompt = f"""Mam w lodówce/spiżarni:
 {_format_inventory(payload.items)}
-{craving_line}
+{craving_line}{feedback_lines}
 
 Zaproponuj 1-3 szybkie posiłki, które mogę zrobić TERAZ z tego, co mam (priorytet: składniki z \
-bliską datą ważności, wysoka zawartość białka). Możesz zakładać podstawowe przyprawy/olej/sól.
+bliską datą ważności, wysoka zawartość białka).{constraint_line}
 
 Odpowiedz WYŁĄCZNIE czystym JSON-em (bez markdown) w formacie:
 {{"suggestions": [{{"name": "...", "kcal": 500, "protein": 30, "ingredients": ["..."], \
@@ -333,10 +359,11 @@ async def regenerate_meal(payload: RegenerateMealRequest):
     avoid_line = (
         f"\nNie proponuj ponownie: {', '.join(payload.avoid)}." if payload.avoid else ""
     )
+    feedback_lines = _feedback_lines(payload.liked, payload.disliked)
 
     prompt = f"""Mam w lodówce/spiżarni:
 {_format_inventory(payload.items)}
-{preference_line}{avoid_line}
+{preference_line}{avoid_line}{feedback_lines}
 
 Zaproponuj JEDEN przepis na obiadokolację (priorytet: składniki z bliską datą ważności, wysoka \
 zawartość białka). Możesz zakładać podstawowe przyprawy/olej/sól.
