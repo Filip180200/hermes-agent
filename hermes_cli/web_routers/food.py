@@ -290,7 +290,7 @@ Odpowiedz WYŁĄCZNIE czystym JSON-em (bez markdown) w formacie:
 "ingredients": ["..."], "steps": ["..."]}}}}]}} — dokładnie 7 dni, w kolejności \
 {", ".join(_DAY_NAMES)}."""
 
-    parsed = await _call_claude_json(prompt, max_tokens=4096)
+    parsed = await _call_claude_json(prompt, max_tokens=8192)
     raw_days = parsed.get("days", [])
 
     days: List[DayPlan] = []
