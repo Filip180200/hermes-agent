@@ -153,9 +153,9 @@ async def parse_receipt(payload: ParseReceiptRequest):
                 }
             ],
         )
-    except Exception as exc:
+    except Exception:
         _log.exception("food: parse-receipt AI call failed")
-        raise HTTPException(status_code=502, detail=f"Nie udało się przeanalizować paragonu: {exc}")
+        raise HTTPException(status_code=502, detail="Nie udało się przeanalizować paragonu")
 
     text = _extract_content_or_reasoning(response) or ""
     try:
@@ -254,9 +254,9 @@ async def _call_claude_json(prompt: str, max_tokens: int) -> dict:
             temperature=0.4,
             messages=[{"role": "user", "content": prompt}],
         )
-    except Exception as exc:
+    except Exception:
         _log.exception("food: AI call failed")
-        raise HTTPException(status_code=502, detail=f"Nie udało się skontaktować z AI: {exc}")
+        raise HTTPException(status_code=502, detail="Nie udało się skontaktować z AI")
 
     text = _extract_content_or_reasoning(response) or ""
     try:
