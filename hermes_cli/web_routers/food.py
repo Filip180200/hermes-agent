@@ -165,3 +165,180 @@ async def parse_receipt(payload: ParseReceiptRequest):
 
     items = [item for item in (_normalize_item(r) for r in raw_items) if item is not None]
     return ParseReceiptResponse(items=items)
+
+
+class InventoryItemIn(BaseModel):
+    name: str
+    quantity: float = 1
+    unit: str = "szt"
+    expiryDate: Optional[str] = None
+
+
+class RecipeOut(BaseModel):
+    name: str
+    kcal: int
+    protein: int
+    ingredients: List[str]
+    steps: List[str]
+
+
+class DayPlan(BaseModel):
+    day: str
+    recipe: RecipeOut
+
+
+class GenerateWeekPlanRequest(BaseModel):
+    items: List[InventoryItemIn]
+    dailyKcalTarget: Optional[int] = None
+    dailyProteinTarget: Optional[int] = None
+
+
+class GenerateWeekPlanResponse(BaseModel):
+    days: List[DayPlan]
+
+
+class SuggestNowRequest(BaseModel):
+    items: List[InventoryItemIn]
+
+
+class SuggestNowResponse(BaseModel):
+    suggestions: List[RecipeOut]
+
+
+_DAY_NAMES = [
+    "Poniedziałek",
+    "Wtorek",
+    "Środa",
+    "Czwartek",
+    "Piątek",
+    "Sobota",
+    "Niedziela",
+]
+
+
+def _format_inventory(items: List[InventoryItemIn]) -> str:
+    if not items:
+        return "(lodówka jest pusta)"
+    lines = []
+    for item in items:
+        expiry = f", ważność: {item.expiryDate}" if item.expiryDate else ""
+        lines.append(f"- {item.name}: {item.quantity} {item.unit}{expiry}")
+    return "\n".join(lines)
+
+
+def _normalize_recipe(raw: dict) -> Optional[RecipeOut]:
+    name = str(raw.get("name") or "").strip()
+    if not name:
+        return None
+    try:
+        kcal = int(round(float(raw.get("kcal", 0) or 0)))
+    except (TypeError, ValueError):
+        kcal = 0
+    try:
+        protein = int(round(float(raw.get("protein", 0) or 0)))
+    except (TypeError, ValueError):
+        protein = 0
+    ingredients = [str(i).strip() for i in (raw.get("ingredients") or []) if str(i).strip()]
+    steps = [str(s).strip() for s in (raw.get("steps") or []) if str(s).strip()]
+    return RecipeOut(name=name, kcal=kcal, protein=protein, ingredients=ingredients, steps=steps)
+
+
+async def _call_claude_json(prompt: str, max_tokens: int) -> dict:
+    try:
+        import anthropic
+    except ImportError:
+        _log.error("food: anthropic package not installed")
+        raise HTTPException(status_code=500, detail="Anthropic SDK not installed on server")
+
+    try:
+        client = anthropic.Anthropic()
+    except Exception:
+        _log.exception("food: failed to init Anthropic client")
+        raise HTTPException(status_code=500, detail="Anthropic credentials not configured")
+
+    try:
+        response = await asyncio.to_thread(
+            client.messages.create,
+            model=_MODEL,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception:
+        _log.exception("food: Anthropic call failed")
+        raise HTTPException(status_code=502, detail="Nie udało się skontaktować z AI")
+
+    text = "".join(
+        block.text for block in response.content if getattr(block, "type", None) == "text"
+    )
+    try:
+        return _extract_json(text)
+    except Exception:
+        _log.warning("food: got non-JSON response: %s", text[:500])
+        raise HTTPException(status_code=502, detail="Nie udało się zrozumieć odpowiedzi AI")
+
+
+@router.post("/api/food/generate-week-plan", response_model=GenerateWeekPlanResponse)
+async def generate_week_plan(payload: GenerateWeekPlanRequest):
+    target_line = ""
+    if payload.dailyKcalTarget or payload.dailyProteinTarget:
+        target_line = (
+            f"\nDzienny cel: ~{payload.dailyKcalTarget or '?'} kcal, "
+            f"~{payload.dailyProteinTarget or '?'} g białka (na cały dzień, ten przepis to jeden posiłek "
+            "więc nie musi pokrywać całości celu)."
+        )
+
+    prompt = f"""Mam w lodówce/spiżarni:
+{_format_inventory(payload.items)}
+{target_line}
+
+Zaproponuj plan posiłków na 7 dni (jeden przepis dziennie, obiadokolacja). Priorytetyzuj składniki \
+z najbliższą datą ważności (żeby się nie zmarnowały) oraz przepisy wysokobiałkowe. Możesz zakładać \
+podstawowe przyprawy/olej/sól, ale głównych składników używaj z listy powyżej gdzie to możliwe — \
+jeśli czegoś brakuje, dopisz to jako dodatkowy składnik.
+
+Odpowiedz WYŁĄCZNIE czystym JSON-em (bez markdown) w formacie:
+{{"days": [{{"day": "Poniedziałek", "recipe": {{"name": "...", "kcal": 650, "protein": 40, \
+"ingredients": ["..."], "steps": ["..."]}}}}]}} — dokładnie 7 dni, w kolejności \
+{", ".join(_DAY_NAMES)}."""
+
+    parsed = await _call_claude_json(prompt, max_tokens=4096)
+    raw_days = parsed.get("days", [])
+
+    days: List[DayPlan] = []
+    for i, raw_day in enumerate(raw_days):
+        recipe = _normalize_recipe(raw_day.get("recipe") or {})
+        if recipe is None:
+            continue
+        day_name = str(raw_day.get("day") or "").strip() or (
+            _DAY_NAMES[i] if i < len(_DAY_NAMES) else f"Dzień {i + 1}"
+        )
+        days.append(DayPlan(day=day_name, recipe=recipe))
+
+    if not days:
+        raise HTTPException(status_code=502, detail="AI nie zwróciło żadnego planu")
+
+    return GenerateWeekPlanResponse(days=days)
+
+
+@router.post("/api/food/suggest-now", response_model=SuggestNowResponse)
+async def suggest_now(payload: SuggestNowRequest):
+    prompt = f"""Mam w lodówce/spiżarni:
+{_format_inventory(payload.items)}
+
+Zaproponuj 1-3 szybkie posiłki, które mogę zrobić TERAZ z tego, co mam (priorytet: składniki z \
+bliską datą ważności, wysoka zawartość białka). Możesz zakładać podstawowe przyprawy/olej/sól.
+
+Odpowiedz WYŁĄCZNIE czystym JSON-em (bez markdown) w formacie:
+{{"suggestions": [{{"name": "...", "kcal": 500, "protein": 30, "ingredients": ["..."], \
+"steps": ["..."]}}]}}"""
+
+    parsed = await _call_claude_json(prompt, max_tokens=2048)
+    raw_suggestions = parsed.get("suggestions", [])
+
+    suggestions = [
+        r for r in (_normalize_recipe(s) for s in raw_suggestions) if r is not None
+    ]
+    if not suggestions:
+        raise HTTPException(status_code=502, detail="AI nie zwróciło żadnych propozycji")
+
+    return SuggestNowResponse(suggestions=suggestions)
