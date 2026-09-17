@@ -57,4 +57,15 @@ PUBLIC_API_PATHS: frozenset[str] = frozenset({
     # the NAS relay's bearer-only callback reaches the verifier instead of a
     # 401 no_cookie. The JWT — not this allowlist — is the security boundary.
     "/api/cron/fire",
+    # food-app (separate frontend under apps.lieberfilip.pl/food/) calls these
+    # as a plain same-origin fetch. It never goes through this dashboard's own
+    # OAuth login, so it can't carry the session cookie this gate checks for.
+    # The actual security boundary is Cloudflare Access, which gates the
+    # whole apps.lieberfilip.pl domain (single Google-account policy) before
+    # any request reaches this origin — see food-app's "food-app" Obsidian
+    # note. Not truly public in the sense of the other entries above, but the
+    # dashboard's own cookie gate is the wrong layer to enforce that boundary.
+    "/api/food/parse-receipt",
+    "/api/food/generate-week-plan",
+    "/api/food/suggest-now",
 })
