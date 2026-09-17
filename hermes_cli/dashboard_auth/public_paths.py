@@ -68,4 +68,5 @@ PUBLIC_API_PATHS: frozenset[str] = frozenset({
     "/api/food/parse-receipt",
     "/api/food/generate-week-plan",
     "/api/food/suggest-now",
+    "/api/food/regenerate-meal",
 })

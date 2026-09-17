@@ -184,38 +184,35 @@ class RecipeOut(BaseModel):
     steps: List[str]
 
 
-class DayPlan(BaseModel):
-    day: str
-    recipe: RecipeOut
-
-
 class GenerateWeekPlanRequest(BaseModel):
     items: List[InventoryItemIn]
+    days: int = 4
     dailyKcalTarget: Optional[int] = None
     dailyProteinTarget: Optional[int] = None
+    preference: Optional[str] = None
 
 
 class GenerateWeekPlanResponse(BaseModel):
-    days: List[DayPlan]
+    recipes: List[RecipeOut]
 
 
 class SuggestNowRequest(BaseModel):
     items: List[InventoryItemIn]
+    craving: Optional[str] = None
 
 
 class SuggestNowResponse(BaseModel):
     suggestions: List[RecipeOut]
 
 
-_DAY_NAMES = [
-    "Poniedziałek",
-    "Wtorek",
-    "Środa",
-    "Czwartek",
-    "Piątek",
-    "Sobota",
-    "Niedziela",
-]
+class RegenerateMealRequest(BaseModel):
+    items: List[InventoryItemIn]
+    preference: Optional[str] = None
+    avoid: Optional[List[str]] = None
+
+
+class RegenerateMealResponse(BaseModel):
+    recipe: RecipeOut
 
 
 def _format_inventory(items: List[InventoryItemIn]) -> str:
@@ -268,6 +265,8 @@ async def _call_claude_json(prompt: str, max_tokens: int) -> dict:
 
 @router.post("/api/food/generate-week-plan", response_model=GenerateWeekPlanResponse)
 async def generate_week_plan(payload: GenerateWeekPlanRequest):
+    days_count = max(1, min(7, payload.days or 4))
+
     target_line = ""
     if payload.dailyKcalTarget or payload.dailyProteinTarget:
         target_line = (
@@ -276,43 +275,38 @@ async def generate_week_plan(payload: GenerateWeekPlanRequest):
             "więc nie musi pokrywać całości celu)."
         )
 
+    preference_line = f"\nPreferencje: {payload.preference}." if payload.preference else ""
+
     prompt = f"""Mam w lodówce/spiżarni:
 {_format_inventory(payload.items)}
-{target_line}
+{target_line}{preference_line}
 
-Zaproponuj plan posiłków na 7 dni (jeden przepis dziennie, obiadokolacja). Priorytetyzuj składniki \
-z najbliższą datą ważności (żeby się nie zmarnowały) oraz przepisy wysokobiałkowe. Możesz zakładać \
-podstawowe przyprawy/olej/sól, ale głównych składników używaj z listy powyżej gdzie to możliwe — \
-jeśli czegoś brakuje, dopisz to jako dodatkowy składnik.
+Zaproponuj plan posiłków na {days_count} dni (jeden przepis dziennie, obiadokolacja). Priorytetyzuj \
+składniki z najbliższą datą ważności (żeby się nie zmarnowały) oraz przepisy wysokobiałkowe. Możesz \
+zakładać podstawowe przyprawy/olej/sól, ale głównych składników używaj z listy powyżej gdzie to \
+możliwe — jeśli czegoś brakuje, dopisz to jako dodatkowy składnik.
 
 Odpowiedz WYŁĄCZNIE czystym JSON-em (bez markdown) w formacie:
-{{"days": [{{"day": "Poniedziałek", "recipe": {{"name": "...", "kcal": 650, "protein": 40, \
-"ingredients": ["..."], "steps": ["..."]}}}}]}} — dokładnie 7 dni, w kolejności \
-{", ".join(_DAY_NAMES)}."""
+{{"recipes": [{{"name": "...", "kcal": 650, "protein": 40, "ingredients": ["..."], \
+"steps": ["..."]}}]}} — dokładnie {days_count} pozycji, każda inny przepis."""
 
-    parsed = await _call_claude_json(prompt, max_tokens=8192)
-    raw_days = parsed.get("days", [])
+    parsed = await _call_claude_json(prompt, max_tokens=1200 * days_count)
+    raw_recipes = parsed.get("recipes", [])
 
-    days: List[DayPlan] = []
-    for i, raw_day in enumerate(raw_days):
-        recipe = _normalize_recipe(raw_day.get("recipe") or {})
-        if recipe is None:
-            continue
-        day_name = str(raw_day.get("day") or "").strip() or (
-            _DAY_NAMES[i] if i < len(_DAY_NAMES) else f"Dzień {i + 1}"
-        )
-        days.append(DayPlan(day=day_name, recipe=recipe))
-
-    if not days:
+    recipes = [r for r in (_normalize_recipe(r) for r in raw_recipes) if r is not None]
+    if not recipes:
         raise HTTPException(status_code=502, detail="AI nie zwróciło żadnego planu")
 
-    return GenerateWeekPlanResponse(days=days)
+    return GenerateWeekPlanResponse(recipes=recipes)
 
 
 @router.post("/api/food/suggest-now", response_model=SuggestNowResponse)
 async def suggest_now(payload: SuggestNowRequest):
+    craving_line = f"\nUżytkownik ma dziś ochotę na: {payload.craving}." if payload.craving else ""
+
     prompt = f"""Mam w lodówce/spiżarni:
 {_format_inventory(payload.items)}
+{craving_line}
 
 Zaproponuj 1-3 szybkie posiłki, które mogę zrobić TERAZ z tego, co mam (priorytet: składniki z \
 bliską datą ważności, wysoka zawartość białka). Możesz zakładać podstawowe przyprawy/olej/sól.
@@ -331,3 +325,28 @@ Odpowiedz WYŁĄCZNIE czystym JSON-em (bez markdown) w formacie:
         raise HTTPException(status_code=502, detail="AI nie zwróciło żadnych propozycji")
 
     return SuggestNowResponse(suggestions=suggestions)
+
+
+@router.post("/api/food/regenerate-meal", response_model=RegenerateMealResponse)
+async def regenerate_meal(payload: RegenerateMealRequest):
+    preference_line = f"\nPreferencje: {payload.preference}." if payload.preference else ""
+    avoid_line = (
+        f"\nNie proponuj ponownie: {', '.join(payload.avoid)}." if payload.avoid else ""
+    )
+
+    prompt = f"""Mam w lodówce/spiżarni:
+{_format_inventory(payload.items)}
+{preference_line}{avoid_line}
+
+Zaproponuj JEDEN przepis na obiadokolację (priorytet: składniki z bliską datą ważności, wysoka \
+zawartość białka). Możesz zakładać podstawowe przyprawy/olej/sól.
+
+Odpowiedz WYŁĄCZNIE czystym JSON-em (bez markdown) w formacie:
+{{"recipe": {{"name": "...", "kcal": 500, "protein": 30, "ingredients": ["..."], "steps": ["..."]}}}}"""
+
+    parsed = await _call_claude_json(prompt, max_tokens=1200)
+    recipe = _normalize_recipe(parsed.get("recipe") or {})
+    if recipe is None:
+        raise HTTPException(status_code=502, detail="AI nie zwróciło przepisu")
+
+    return RegenerateMealResponse(recipe=recipe)
