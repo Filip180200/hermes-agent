@@ -263,9 +263,9 @@ async def _call_claude_json(prompt: str, max_tokens: int) -> dict:
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-    except Exception:
+    except Exception as exc:
         _log.exception("food: Anthropic call failed")
-        raise HTTPException(status_code=502, detail="Nie udało się skontaktować z AI")
+        raise HTTPException(status_code=502, detail=f"Nie udało się skontaktować z AI: {exc}")
 
     text = "".join(
         block.text for block in response.content if getattr(block, "type", None) == "text"
