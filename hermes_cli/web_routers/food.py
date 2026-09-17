@@ -8,13 +8,15 @@ its own Firestore ``food_inventory`` collection. Same-origin as this backend
 plain relative ``fetch`` — no separate auth bridge needed, Cloudflare Access
 already gates the whole domain.
 
-Uses the ``anthropic`` SDK directly against whatever credential is already in
-this process's env (``ANTHROPIC_API_KEY`` et al., same as the rest of
-hermes-dashboard) — food-app intentionally has no AI config of its own, see
-the "food-app" Obsidian note.
+Uses Hermes' own internal auxiliary-LLM client (``agent.auxiliary_client``,
+the same one ``tools/vision_tools.py`` and ``agent/title_generator.py`` use
+for one-off model calls) instead of a raw ``anthropic.Anthropic()`` client —
+this process's env has no ``ANTHROPIC_API_KEY``, credentials live behind that
+layer. Reuses whatever provider/model is already configured for the main
+agent; food-app intentionally has no AI config of its own, see the
+"food-app" Obsidian note.
 """
 
-import asyncio
 import base64
 import binascii
 import json
@@ -30,8 +32,25 @@ _log = logging.getLogger("hermes_cli.web_server")
 
 router = APIRouter()
 
-_MODEL = "claude-sonnet-5"
-# Generous headroom over a phone photo; Anthropic itself caps images well below this.
+# Lazy-loaded, mirroring tools/vision_tools.py — agent.auxiliary_client pulls
+# in credential_pool -> hermes_cli.auth -> httpx (~50ms cold), only needed
+# once a food request actually comes in.
+_async_call_llm = None
+_extract_content_or_reasoning = None
+
+
+def _load_auxiliary_client() -> None:
+    global _async_call_llm, _extract_content_or_reasoning
+    if _async_call_llm is None or _extract_content_or_reasoning is None:
+        from agent.auxiliary_client import (
+            async_call_llm as _acl,
+            extract_content_or_reasoning as _ecr,
+        )
+        _async_call_llm = _acl
+        _extract_content_or_reasoning = _ecr
+
+
+# Generous headroom over a phone photo; vision models cap images well below this.
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 _ALLOWED_UNITS = {"szt", "g", "kg", "ml", "l"}
@@ -66,7 +85,7 @@ class ParseReceiptResponse(BaseModel):
     items: List[ParsedItem]
 
 
-def _decode_data_url(data_url: str) -> tuple:
+def _validate_data_url(data_url: str) -> None:
     if not data_url.startswith("data:") or "," not in data_url:
         raise HTTPException(status_code=400, detail="Invalid image payload")
     header, encoded = data_url.split(",", 1)
@@ -83,7 +102,6 @@ def _decode_data_url(data_url: str) -> tuple:
         raise HTTPException(status_code=400, detail="Image is empty")
     if len(raw) > _MAX_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="Image is too large")
-    return media_type, encoded
 
 
 def _extract_json(text: str) -> dict:
@@ -115,47 +133,31 @@ def _normalize_item(raw: dict) -> Optional[ParsedItem]:
 
 @router.post("/api/food/parse-receipt", response_model=ParseReceiptResponse)
 async def parse_receipt(payload: ParseReceiptRequest):
-    media_type, encoded = _decode_data_url(payload.data_url)
-
-    try:
-        import anthropic
-    except ImportError:
-        _log.error("food: anthropic package not installed")
-        raise HTTPException(status_code=500, detail="Anthropic SDK not installed on server")
-
-    try:
-        client = anthropic.Anthropic()
-    except Exception:
-        _log.exception("food: failed to init Anthropic client")
-        raise HTTPException(status_code=500, detail="Anthropic credentials not configured")
+    _validate_data_url(payload.data_url)
+    _load_auxiliary_client()
 
     prompt = _PROMPT_TEMPLATE.format(today=date.today().isoformat())
 
     try:
-        response = await asyncio.to_thread(
-            client.messages.create,
-            model=_MODEL,
+        response = await _async_call_llm(
+            task="vision",
             max_tokens=2048,
+            temperature=0.1,
             messages=[
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "image",
-                            "source": {"type": "base64", "media_type": media_type, "data": encoded},
-                        },
                         {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": payload.data_url}},
                     ],
                 }
             ],
         )
-    except Exception:
-        _log.exception("food: parse-receipt Anthropic call failed")
-        raise HTTPException(status_code=502, detail="Nie udało się przeanalizować paragonu")
+    except Exception as exc:
+        _log.exception("food: parse-receipt AI call failed")
+        raise HTTPException(status_code=502, detail=f"Nie udało się przeanalizować paragonu: {exc}")
 
-    text = "".join(
-        block.text for block in response.content if getattr(block, "type", None) == "text"
-    )
+    text = _extract_content_or_reasoning(response) or ""
     try:
         parsed = _extract_json(text)
         raw_items = parsed.get("items", [])
@@ -244,32 +246,19 @@ def _normalize_recipe(raw: dict) -> Optional[RecipeOut]:
 
 
 async def _call_claude_json(prompt: str, max_tokens: int) -> dict:
-    try:
-        import anthropic
-    except ImportError:
-        _log.error("food: anthropic package not installed")
-        raise HTTPException(status_code=500, detail="Anthropic SDK not installed on server")
+    _load_auxiliary_client()
 
     try:
-        client = anthropic.Anthropic()
-    except Exception:
-        _log.exception("food: failed to init Anthropic client")
-        raise HTTPException(status_code=500, detail="Anthropic credentials not configured")
-
-    try:
-        response = await asyncio.to_thread(
-            client.messages.create,
-            model=_MODEL,
+        response = await _async_call_llm(
             max_tokens=max_tokens,
+            temperature=0.4,
             messages=[{"role": "user", "content": prompt}],
         )
     except Exception as exc:
-        _log.exception("food: Anthropic call failed")
+        _log.exception("food: AI call failed")
         raise HTTPException(status_code=502, detail=f"Nie udało się skontaktować z AI: {exc}")
 
-    text = "".join(
-        block.text for block in response.content if getattr(block, "type", None) == "text"
-    )
+    text = _extract_content_or_reasoning(response) or ""
     try:
         return _extract_json(text)
     except Exception:
