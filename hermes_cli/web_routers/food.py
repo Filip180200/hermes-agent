@@ -187,6 +187,7 @@ class RecipeOut(BaseModel):
 class GenerateWeekPlanRequest(BaseModel):
     items: List[InventoryItemIn]
     days: int = 4
+    mealsPerDay: int = 3
     dailyKcalTarget: Optional[int] = None
     dailyProteinTarget: Optional[int] = None
     preference: Optional[str] = None
@@ -194,8 +195,12 @@ class GenerateWeekPlanRequest(BaseModel):
     disliked: Optional[List[str]] = None
 
 
+class DayPlanOut(BaseModel):
+    meals: List[RecipeOut]
+
+
 class GenerateWeekPlanResponse(BaseModel):
-    recipes: List[RecipeOut]
+    days: List[DayPlanOut]
 
 
 class SuggestNowRequest(BaseModel):
@@ -283,39 +288,48 @@ async def _call_claude_json(prompt: str, max_tokens: int) -> dict:
 @router.post("/api/food/generate-week-plan", response_model=GenerateWeekPlanResponse)
 async def generate_week_plan(payload: GenerateWeekPlanRequest):
     days_count = max(1, min(7, payload.days or 4))
+    meals_per_day = max(1, min(6, payload.mealsPerDay or 3))
 
     target_line = ""
     if payload.dailyKcalTarget or payload.dailyProteinTarget:
         target_line = (
             f"\nDzienny cel: ~{payload.dailyKcalTarget or '?'} kcal, "
-            f"~{payload.dailyProteinTarget or '?'} g białka (na cały dzień, ten przepis to jeden posiłek "
-            "więc nie musi pokrywać całości celu)."
+            f"~{payload.dailyProteinTarget or '?'} g białka na cały dzień — suma {meals_per_day} "
+            "posiłków danego dnia ma się zbliżać do tego celu, nie każdy posiłek z osobna."
         )
 
     preference_line = f"\nPreferencje: {payload.preference}." if payload.preference else ""
     feedback_lines = _feedback_lines(payload.liked, payload.disliked)
 
+    meals_word = "posiłek" if meals_per_day == 1 else "posiłki"
     prompt = f"""Mam w lodówce/spiżarni:
 {_format_inventory(payload.items)}
 {target_line}{preference_line}{feedback_lines}
 
-Zaproponuj plan posiłków na {days_count} dni (jeden przepis dziennie, obiadokolacja). Priorytetyzuj \
-składniki z najbliższą datą ważności (żeby się nie zmarnowały) oraz przepisy wysokobiałkowe. Możesz \
-zakładać podstawowe przyprawy/olej/sól, ale głównych składników używaj z listy powyżej gdzie to \
-możliwe — jeśli czegoś brakuje, dopisz to jako dodatkowy składnik.
+Zaproponuj plan posiłków na {days_count} dni, każdy dzień ma dokładnie {meals_per_day} {meals_word} \
+(różne pory dnia, np. śniadanie/obiad/kolacja gdy więcej niż jeden). Priorytetyzuj składniki z \
+najbliższą datą ważności (żeby się nie zmarnowały) oraz przepisy wysokobiałkowe. Możesz zakładać \
+podstawowe przyprawy/olej/sól, ale głównych składników używaj z listy powyżej gdzie to możliwe — \
+jeśli czegoś brakuje, dopisz to jako dodatkowy składnik.
 
 Odpowiedz WYŁĄCZNIE czystym JSON-em (bez markdown) w formacie:
-{{"recipes": [{{"name": "...", "kcal": 650, "protein": 40, "ingredients": ["..."], \
-"steps": ["..."]}}]}} — dokładnie {days_count} pozycji, każda inny przepis."""
+{{"days": [{{"meals": [{{"name": "...", "kcal": 650, "protein": 40, "ingredients": ["..."], \
+"steps": ["..."]}}]}}]}} — dokładnie {days_count} dni, każdy z dokładnie {meals_per_day} pozycjami \
+w "meals"."""
 
-    parsed = await _call_claude_json(prompt, max_tokens=1200 * days_count)
-    raw_recipes = parsed.get("recipes", [])
+    parsed = await _call_claude_json(prompt, max_tokens=1200 * days_count * meals_per_day)
+    raw_days = parsed.get("days", [])
 
-    recipes = [r for r in (_normalize_recipe(r) for r in raw_recipes) if r is not None]
-    if not recipes:
+    days: List[DayPlanOut] = []
+    for raw_day in raw_days:
+        raw_meals = raw_day.get("meals", []) if isinstance(raw_day, dict) else []
+        meals = [m for m in (_normalize_recipe(r) for r in raw_meals) if m is not None]
+        if meals:
+            days.append(DayPlanOut(meals=meals))
+    if not days:
         raise HTTPException(status_code=502, detail="AI nie zwróciło żadnego planu")
 
-    return GenerateWeekPlanResponse(recipes=recipes)
+    return GenerateWeekPlanResponse(days=days)
 
 
 @router.post("/api/food/suggest-now", response_model=SuggestNowResponse)
