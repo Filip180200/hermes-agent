@@ -5,6 +5,7 @@ on:
     branches: [dashboard-cards]
     paths:
       - "hermes_cli/web_routers/food.py"
+  workflow_dispatch: {}
 
 jobs:
   deploy:
