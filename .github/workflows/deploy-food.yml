@@ -1,0 +1,37 @@
+name: Deploy food.py
+
+on:
+  push:
+    branches: [dashboard-cards]
+    paths:
+      - "hermes_cli/web_routers/food.py"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Copy food.py to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.ORACLE_HOST }}
+          username: ${{ secrets.ORACLE_USER }}
+          key: ${{ secrets.ORACLE_SSH_KEY }}
+          source: "hermes_cli/web_routers/food.py"
+          target: "~/"
+          strip_components: 2
+
+      - name: Install and restart hermes-dashboard
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORACLE_HOST }}
+          username: ${{ secrets.ORACLE_USER }}
+          key: ${{ secrets.ORACLE_SSH_KEY }}
+          script: |
+            set -e
+            sudo -n cp ~/food.py /home/hermes/.hermes/hermes-agent/hermes_cli/web_routers/food.py
+            sudo -n chown hermes:hermes /home/hermes/.hermes/hermes-agent/hermes_cli/web_routers/food.py
+            rm ~/food.py
+            sudo -n systemctl restart hermes-dashboard
