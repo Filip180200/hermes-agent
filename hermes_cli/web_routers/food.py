@@ -396,3 +396,4 @@ Odpowiedz WYŁĄCZNIE czystym JSON-em (bez markdown) w formacie:
         raise HTTPException(status_code=502, detail="AI nie zwróciło przepisu")
 
     return RegenerateMealResponse(recipe=recipe)
+
