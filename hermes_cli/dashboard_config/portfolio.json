@@ -1,10 +1,10 @@
 {
   "stocks": [
-    { "ticker": "CDR.WA", "label": "CD Projekt", "shares": 0 },
-    { "ticker": "PKN.WA", "label": "Orlen", "shares": 0 }
+    { "ticker": "XTB.WA", "label": "XTB", "shares": 0 },
+    { "ticker": "KRU.WA", "label": "Kruk", "shares": 0 }
   ],
   "crypto": [
     { "id": "bitcoin", "label": "Bitcoin", "amount": 0 },
-    { "id": "ethereum", "label": "Ethereum", "amount": 0 }
+    { "id": "sei-network", "label": "Sei", "amount": 0 }
   ]
 }
