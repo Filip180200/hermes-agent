@@ -1122,6 +1122,18 @@ DEFAULT_CONFIG = {
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
         },
+        # Food app — hermes_cli/web_routers/food.py's week-plan/suggest-now/
+        # regenerate-meal calls for the separate food-app frontend. "auto" =
+        # main chat model; override via `hermes model` → auxiliary → Food App.
+        "food_app": {
+            "provider": "auto",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "timeout": 120,        # seconds — week-plan generation returns a lot of JSON (multi-day, multi-meal)
+            "extra_body": {},
+            "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
+        },
         "approval": {
             "provider": "auto",
             "model": "",           # fast/cheap model recommended (e.g. gemini-flash, haiku)

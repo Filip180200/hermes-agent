@@ -269,6 +269,7 @@ async def _call_claude_json(prompt: str, max_tokens: int) -> dict:
 
     try:
         response = await _async_call_llm(
+            task="food_app",
             max_tokens=max_tokens,
             temperature=0.4,
             messages=[{"role": "user", "content": prompt}],
