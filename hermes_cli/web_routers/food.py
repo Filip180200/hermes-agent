@@ -63,8 +63,14 @@ typowego okresu przydatności tego typu produktu (np. świeże pieczywo ~3 dni, 
 mrożonki kilka miesięcy, konserwy/produkty suche wiele miesięcy) licząc od dzisiejszej daty — jeśli \
 produkt w ogóle nie ma sensownej daty ważności (np. przyprawa, ocet), zwróć null.
 
+Dla każdego produktu oszacuj też typową wartość odżywczą na podstawie ogólnej wiedzy o tego typu \
+produkcie (nie musisz znać konkretnej marki) — kcal i białko (g) na jednostkę: jeśli unit to "szt", \
+podaj wartość na 1 sztukę; w przeciwnym razie podaj wartość na 100 g/ml produktu. Jeśli produkt nie \
+ma sensownej wartości odżywczej (np. przyprawa w małej ilości, ocet), zwróć null dla obu pól.
+
 Odpowiedz WYŁĄCZNIE czystym JSON-em (bez markdown, bez komentarzy) w formacie:
-{{"items": [{{"name": "...", "quantity": 1, "unit": "szt|g|kg|ml|l", "expiryDate": "YYYY-MM-DD" | null}}]}}
+{{"items": [{{"name": "...", "quantity": 1, "unit": "szt|g|kg|ml|l", "expiryDate": "YYYY-MM-DD" | null, \
+"kcalPerUnit": 52 | null, "proteinPerUnit": 0.3 | null}}]}}
 
 Jeśli nie da się odczytać ilości, użyj quantity: 1, unit: "szt". Nazwa produktu po polsku, skrócona \
 i czytelna (nie surowy skrót z paragonu)."""
@@ -79,6 +85,8 @@ class ParsedItem(BaseModel):
     quantity: float = 1
     unit: str = "szt"
     expiryDate: Optional[str] = None
+    kcalPerUnit: Optional[float] = None
+    proteinPerUnit: Optional[float] = None
 
 
 class ParseReceiptResponse(BaseModel):
@@ -128,7 +136,24 @@ def _normalize_item(raw: dict) -> Optional[ParsedItem]:
     expiry = raw.get("expiryDate")
     if expiry is not None and not re.match(r"^\d{4}-\d{2}-\d{2}$", str(expiry)):
         expiry = None
-    return ParsedItem(name=name, quantity=quantity, unit=unit, expiryDate=expiry)
+
+    def _nonneg_float(value) -> Optional[float]:
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return None
+        return num if num >= 0 else None
+
+    kcal_per_unit = _nonneg_float(raw.get("kcalPerUnit"))
+    protein_per_unit = _nonneg_float(raw.get("proteinPerUnit"))
+    return ParsedItem(
+        name=name,
+        quantity=quantity,
+        unit=unit,
+        expiryDate=expiry,
+        kcalPerUnit=kcal_per_unit,
+        proteinPerUnit=protein_per_unit,
+    )
 
 
 @router.post("/api/food/parse-receipt", response_model=ParseReceiptResponse)
